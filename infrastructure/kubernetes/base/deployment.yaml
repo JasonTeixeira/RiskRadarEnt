@@ -1,0 +1,484 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk-api
+  namespace: riskradar
+  labels:
+    app: risk-api
+    component: api
+    tier: backend
+    version: v1
+spec:
+  replicas: 3
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: risk-api
+  template:
+    metadata:
+      labels:
+        app: risk-api
+        component: api
+        tier: backend
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: risk-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.35
+          command: ['sh', '-c', 'until nc -z postgres 5432; do echo waiting for db; sleep 2; done;']
+        
+        - name: run-migrations
+          image: risk-api:latest
+          command: ['python', 'manage.py', 'migrate']
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: risk-api-secrets
+                  key: database-url
+      
+      containers:
+        - name: risk-api
+          image: risk-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: SERVICE_NAME
+              value: "risk-api"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: PORT
+              value: "8000"
+            - name: WORKERS
+              value: "4"
+            
+            # Database
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: risk-api-secrets
+                  key: database-url
+            
+            # Redis
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: risk-api-secrets
+                  key: redis-url
+            
+            # Kafka
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-bootstrap:9092"
+            
+            # Security
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: risk-api-secrets
+                  key: secret-key
+            
+            # AWS
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: risk-api-secrets
+                  key: aws-access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: risk-api-secrets
+                  key: aws-secret-access-key
+          
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: User-Agent
+                  value: "Kubernetes-Liveness-Probe"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              httpHeaders:
+                - name: User-Agent
+                  value: "Kubernetes-Readiness-Probe"
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+          
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: secrets
+              mountPath: /app/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+      
+      volumes:
+        - name: config
+          configMap:
+            name: risk-api-config
+        - name: secrets
+          secret:
+            secretName: risk-api-secrets
+        - name: tmp
+          emptyDir: {}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - risk-api
+                topologyKey: kubernetes.io/hostname
+      
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: risk-api
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk-compute-worker
+  namespace: riskradar
+  labels:
+    app: risk-compute-worker
+    component: worker
+    tier: backend
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: risk-compute-worker
+  template:
+    metadata:
+      labels:
+        app: risk-compute-worker
+        component: worker
+        tier: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+    spec:
+      serviceAccountName: risk-compute-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      
+      containers:
+        - name: worker
+          image: risk-compute-worker:latest
+          imagePullPolicy: Always
+          command: ["celery", "-A", "app.worker", "worker", "--loglevel=info", "--concurrency=4"]
+          
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: SERVICE_NAME
+              value: "risk-compute-worker"
+            - name: LOG_LEVEL
+              value: "INFO"
+            
+            # Celery
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: risk-worker-secrets
+                  key: celery-broker-url
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: risk-worker-secrets
+                  key: celery-result-backend
+            
+            # Database
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: risk-worker-secrets
+                  key: database-url
+            
+            # Redis
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: risk-worker-secrets
+                  key: redis-url
+            
+            # Kafka
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-bootstrap:9092"
+          
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+          
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.worker
+                - inspect
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+          
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /app/.cache
+          
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+      
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+      
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: workload-type
+                    operator: In
+                    values:
+                      - compute
+      
+      tolerations:
+        - key: "compute-intensive"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: risk-api-hpa
+  namespace: riskradar
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: risk-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "1000"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Min
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: risk-compute-worker-hpa
+  namespace: riskradar
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: risk-compute-worker
+  minReplicas: 5
+  maxReplicas: 50
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 85
+    - type: External
+      external:
+        metric:
+          name: celery_queue_length
+          selector:
+            matchLabels:
+              queue: risk_calculations
+        target:
+          type: Value
+          value: "100"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 200
+          periodSeconds: 30
+        - type: Pods
+          value: 10
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 120
+        - type: Pods
+          value: 5
+          periodSeconds: 120
+      selectPolicy: Min
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: risk-api-pdb
+  namespace: riskradar
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: risk-api
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: risk-compute-worker-pdb
+  namespace: riskradar
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: risk-compute-worker

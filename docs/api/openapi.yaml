@@ -1,0 +1,974 @@
+openapi: 3.1.0
+info:
+  title: RiskRadar Enterprise API
+  description: |
+    # RiskRadar Enterprise Risk Management Platform
+    
+    Production-grade API for institutional portfolio risk management, providing real-time risk calculations,
+    stress testing, Monte Carlo simulations, and comprehensive portfolio analytics.
+    
+    ## Features
+    - **Real-time Risk Calculations** - Sub-second calculation of 17+ risk metrics
+    - **Portfolio Management** - Multi-tenant portfolio tracking with audit trails
+    - **Stress Testing** - Scenario analysis and stress testing capabilities
+    - **Monte Carlo Simulations** - Advanced probabilistic risk modeling
+    - **WebSocket Support** - Real-time updates for risk metrics and alerts
+    
+    ## Authentication
+    The API supports multiple authentication methods:
+    - **Bearer Token (JWT)** - Primary authentication method
+    - **API Key** - For programmatic access
+    - **OAuth 2.0** - For third-party integrations
+    
+    ## Rate Limiting
+    Rate limits are enforced based on your subscription tier:
+    - **Basic**: 30 requests/minute, 500 requests/hour
+    - **Standard**: 60 requests/minute, 1,000 requests/hour
+    - **Premium**: 120 requests/minute, 5,000 requests/hour
+    - **Enterprise**: 600 requests/minute, 50,000 requests/hour
+    
+    ## Environments
+    - **Production**: `https://api.riskradar.com`
+    - **Staging**: `https://staging-api.riskradar.com`
+    - **Development**: `https://dev-api.riskradar.com`
+    
+  version: 1.0.0
+  termsOfService: https://riskradar.com/terms
+  contact:
+    name: RiskRadar Support
+    email: support@riskradar.com
+    url: https://support.riskradar.com
+  license:
+    name: Proprietary
+    url: https://riskradar.com/license
+    
+servers:
+  - url: https://api.riskradar.com
+    description: Production Server
+  - url: https://staging-api.riskradar.com
+    description: Staging Server
+  - url: http://localhost:8000
+    description: Local Development
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+tags:
+  - name: Authentication
+    description: User authentication and authorization
+  - name: Risk Calculations
+    description: Portfolio risk calculation endpoints
+  - name: Portfolios
+    description: Portfolio management operations
+  - name: Positions
+    description: Position management within portfolios
+  - name: Market Data
+    description: Market data retrieval and management
+  - name: Alerts
+    description: Risk alerts and notifications
+  - name: Reports
+    description: Risk reporting and exports
+  - name: Health
+    description: Service health and monitoring
+  - name: Admin
+    description: Administrative operations
+
+paths:
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      summary: User login
+      description: Authenticate user and receive JWT tokens
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successfully authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+          
+  /api/v1/auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Refresh access token
+      description: Exchange refresh token for new access token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: Valid refresh token
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+                
+  /api/v1/risk/calculate:
+    post:
+      tags: [Risk Calculations]
+      summary: Calculate portfolio risk metrics
+      description: |
+        Calculate comprehensive risk metrics for a portfolio. Supports both synchronous 
+        and asynchronous processing based on calculation complexity.
+      operationId: calculateRisk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RiskCalculationRequest'
+            examples:
+              basic:
+                summary: Basic risk calculation
+                value:
+                  portfolio_id: "550e8400-e29b-41d4-a716-446655440000"
+                  metrics: ["var", "cvar", "sharpe_ratio"]
+                  confidence_level: 0.95
+                  time_horizon: "1d"
+              comprehensive:
+                summary: Comprehensive risk analysis
+                value:
+                  portfolio_id: "550e8400-e29b-41d4-a716-446655440000"
+                  metrics: ["var", "cvar", "sharpe_ratio", "sortino_ratio", "max_drawdown", "beta", "alpha"]
+                  confidence_level: 0.99
+                  time_horizon: "1m"
+                  benchmark_id: "SPY"
+                  use_cache: false
+                  priority: "high"
+      responses:
+        '200':
+          description: Risk calculation completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskCalculationResponse'
+        '202':
+          description: Risk calculation queued for async processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncRiskCalculationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+          
+  /api/v1/risk/calculation/{calculation_id}:
+    get:
+      tags: [Risk Calculations]
+      summary: Get calculation result
+      description: Retrieve the results of a risk calculation by ID
+      operationId: getCalculationResult
+      parameters:
+        - name: calculation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Calculation result retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskCalculationResponse'
+                
+  /api/v1/risk/stress-test:
+    post:
+      tags: [Risk Calculations]
+      summary: Run stress test scenarios
+      description: Execute stress test scenarios on a portfolio
+      operationId: runStressTest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StressTestRequest'
+            examples:
+              marketCrash:
+                summary: Market crash scenario
+                value:
+                  portfolio_id: "550e8400-e29b-41d4-a716-446655440000"
+                  scenarios:
+                    "2008 Financial Crisis":
+                      SPY: -0.37
+                      TLT: 0.15
+                      GLD: 0.25
+                    "COVID-19 Crash":
+                      SPY: -0.34
+                      TLT: 0.08
+                      GLD: 0.07
+      responses:
+        '202':
+          description: Stress test queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StressTestResponse'
+                
+  /api/v1/risk/monte-carlo:
+    post:
+      tags: [Risk Calculations]
+      summary: Run Monte Carlo simulation
+      description: Execute Monte Carlo simulation for portfolio risk analysis
+      operationId: runMonteCarlo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonteCarloRequest'
+      responses:
+        '202':
+          description: Monte Carlo simulation queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonteCarloResponse'
+                
+  /api/v1/portfolios:
+    get:
+      tags: [Portfolios]
+      summary: List portfolios
+      description: Retrieve a paginated list of portfolios
+      operationId: listPortfolios
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive, suspended, liquidating, closed]
+        - name: search
+          in: query
+          schema:
+            type: string
+            description: Search by name or code
+      responses:
+        '200':
+          description: Portfolio list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioListResponse'
+                
+    post:
+      tags: [Portfolios]
+      summary: Create portfolio
+      description: Create a new portfolio
+      operationId: createPortfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePortfolioRequest'
+      responses:
+        '201':
+          description: Portfolio created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Portfolio'
+                
+  /api/v1/portfolios/{portfolio_id}:
+    get:
+      tags: [Portfolios]
+      summary: Get portfolio details
+      description: Retrieve detailed information about a specific portfolio
+      operationId: getPortfolio
+      parameters:
+        - $ref: '#/components/parameters/PortfolioIdParam'
+      responses:
+        '200':
+          description: Portfolio details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Portfolio'
+                
+    put:
+      tags: [Portfolios]
+      summary: Update portfolio
+      description: Update portfolio information
+      operationId: updatePortfolio
+      parameters:
+        - $ref: '#/components/parameters/PortfolioIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePortfolioRequest'
+      responses:
+        '200':
+          description: Portfolio updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Portfolio'
+                
+    delete:
+      tags: [Portfolios]
+      summary: Delete portfolio
+      description: Delete a portfolio (soft delete)
+      operationId: deletePortfolio
+      parameters:
+        - $ref: '#/components/parameters/PortfolioIdParam'
+      responses:
+        '204':
+          description: Portfolio deleted successfully
+          
+  /api/v1/portfolios/{portfolio_id}/positions:
+    get:
+      tags: [Positions]
+      summary: List portfolio positions
+      description: Get all positions in a portfolio
+      operationId: listPositions
+      parameters:
+        - $ref: '#/components/parameters/PortfolioIdParam'
+        - name: asset_class
+          in: query
+          schema:
+            type: string
+            enum: [equity, fixed_income, commodity, currency, crypto, derivative, alternative]
+      responses:
+        '200':
+          description: Position list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PositionListResponse'
+                
+  /api/v1/portfolios/{portfolio_id}/summary:
+    get:
+      tags: [Portfolios]
+      summary: Get portfolio risk summary
+      description: Retrieve comprehensive risk summary for a portfolio
+      operationId: getPortfolioSummary
+      parameters:
+        - $ref: '#/components/parameters/PortfolioIdParam'
+      responses:
+        '200':
+          description: Risk summary retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioRiskSummary'
+                
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Comprehensive health check with component status
+      operationId: healthCheck
+      security: []
+      parameters:
+        - name: include_details
+          in: query
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+                
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: Kubernetes liveness probe endpoint
+      operationId: livenessProbe
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: Kubernetes readiness probe endpoint
+      operationId: readinessProbe
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+        '503':
+          description: Service is not ready
+          
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics
+      description: Export metrics in Prometheus format
+      operationId: prometheusMetrics
+      security: []
+      responses:
+        '200':
+          description: Metrics exported
+          content:
+            text/plain:
+              schema:
+                type: string
+                
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT authentication token
+      
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for programmatic access
+      
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.riskradar.com/oauth/authorize
+          tokenUrl: https://auth.riskradar.com/oauth/token
+          scopes:
+            read:portfolios: Read portfolio data
+            write:portfolios: Modify portfolios
+            read:risk: Read risk calculations
+            write:risk: Execute risk calculations
+            admin: Administrative access
+            
+  parameters:
+    PortfolioIdParam:
+      name: portfolio_id
+      in: path
+      required: true
+      description: Portfolio UUID
+      schema:
+        type: string
+        format: uuid
+        
+    PageParam:
+      name: page
+      in: query
+      description: Page number for pagination
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+        
+    PageSizeParam:
+      name: page_size
+      in: query
+      description: Number of items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+        
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          description: Username or email
+          example: john.doe@example.com
+        password:
+          type: string
+          format: password
+          description: User password
+        mfa_code:
+          type: string
+          description: MFA code if enabled
+          pattern: '^[0-9]{6}$'
+          
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT access token
+        refresh_token:
+          type: string
+          description: JWT refresh token
+        token_type:
+          type: string
+          enum: [bearer]
+          default: bearer
+        expires_in:
+          type: integer
+          description: Token expiration time in seconds
+          example: 3600
+          
+    RiskCalculationRequest:
+      type: object
+      required: [portfolio_id, metrics]
+      properties:
+        portfolio_id:
+          type: string
+          format: uuid
+          description: Portfolio to calculate risk for
+        metrics:
+          type: array
+          items:
+            type: string
+            enum: [var, cvar, expected_shortfall, sharpe_ratio, sortino_ratio, 
+                   calmar_ratio, max_drawdown, volatility, beta, alpha, 
+                   treynor_ratio, information_ratio, tracking_error, 
+                   downside_deviation, omega_ratio, kurtosis, skewness]
+          minItems: 1
+          description: Risk metrics to calculate
+        confidence_level:
+          type: number
+          minimum: 0.90
+          maximum: 0.99
+          default: 0.95
+          description: Confidence level for VaR/CVaR
+        time_horizon:
+          type: string
+          enum: [1d, 1w, 1m, 3m, 1y]
+          default: 1d
+          description: Time horizon for calculations
+        benchmark_id:
+          type: string
+          description: Benchmark for relative metrics
+        use_cache:
+          type: boolean
+          default: true
+          description: Use cached results if available
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+          default: normal
+          description: Calculation priority
+          
+    RiskCalculationResponse:
+      type: object
+      properties:
+        calculation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        results:
+          type: object
+          additionalProperties:
+            type: number
+          description: Calculated risk metrics
+        metadata:
+          type: object
+          properties:
+            calculated_at:
+              type: string
+              format: date-time
+            calculation_time_ms:
+              type: number
+            data_points_used:
+              type: integer
+            
+    AsyncRiskCalculationResponse:
+      type: object
+      properties:
+        calculation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, queued]
+        task_id:
+          type: string
+          description: Celery task ID
+        estimated_time:
+          type: number
+          description: Estimated completion time in seconds
+        message:
+          type: string
+          
+    StressTestRequest:
+      type: object
+      required: [portfolio_id, scenarios]
+      properties:
+        portfolio_id:
+          type: string
+          format: uuid
+        scenarios:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: number
+          description: Stress test scenarios with asset price changes
+          
+    StressTestResponse:
+      type: object
+      properties:
+        calculation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        task_id:
+          type: string
+        message:
+          type: string
+          
+    MonteCarloRequest:
+      type: object
+      required: [portfolio_id]
+      properties:
+        portfolio_id:
+          type: string
+          format: uuid
+        num_simulations:
+          type: integer
+          minimum: 1000
+          maximum: 100000
+          default: 10000
+        time_horizon:
+          type: integer
+          minimum: 1
+          maximum: 1260
+          default: 252
+          description: Time horizon in days
+        confidence_levels:
+          type: array
+          items:
+            type: number
+            minimum: 0.90
+            maximum: 0.99
+          default: [0.95, 0.99]
+          
+    MonteCarloResponse:
+      type: object
+      properties:
+        calculation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        task_id:
+          type: string
+        estimated_time:
+          type: number
+          
+    Portfolio:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        code:
+          type: string
+        description:
+          type: string
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        status:
+          type: string
+          enum: [active, inactive, suspended, liquidating, closed]
+        initial_value:
+          type: number
+        current_value:
+          type: number
+        cash_balance:
+          type: number
+        inception_date:
+          type: string
+          format: date-time
+        target_volatility:
+          type: number
+        max_drawdown_limit:
+          type: number
+        var_limit:
+          type: number
+        leverage_limit:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          
+    CreatePortfolioRequest:
+      type: object
+      required: [name, code, initial_value]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        code:
+          type: string
+          minLength: 1
+          maxLength: 50
+        description:
+          type: string
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          default: USD
+        initial_value:
+          type: number
+          minimum: 0
+          
+    UpdatePortfolioRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, suspended]
+        target_volatility:
+          type: number
+        max_drawdown_limit:
+          type: number
+        var_limit:
+          type: number
+        leverage_limit:
+          type: number
+          
+    Position:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        portfolio_id:
+          type: string
+          format: uuid
+        symbol:
+          type: string
+        name:
+          type: string
+        asset_class:
+          type: string
+          enum: [equity, fixed_income, commodity, currency, crypto, derivative, alternative]
+        quantity:
+          type: number
+        average_price:
+          type: number
+        current_price:
+          type: number
+        cost_basis:
+          type: number
+        market_value:
+          type: number
+        unrealized_pnl:
+          type: number
+        weight:
+          type: number
+        
+    PortfolioListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Portfolio'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+        has_next:
+          type: boolean
+          
+    PositionListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Position'
+        total:
+          type: integer
+          
+    PortfolioRiskSummary:
+      type: object
+      properties:
+        portfolio_id:
+          type: string
+          format: uuid
+        current_metrics:
+          type: object
+          additionalProperties:
+            type: number
+        var_95:
+          type: number
+        cvar_95:
+          type: number
+        volatility:
+          type: number
+        sharpe_ratio:
+          type: number
+        max_drawdown:
+          type: number
+        calculated_at:
+          type: string
+          format: date-time
+        risk_score:
+          type: number
+          minimum: 0
+          maximum: 100
+        risk_trends:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              var:
+                type: number
+              volatility:
+                type: number
+              sharpe:
+                type: number
+        alerts:
+          type: array
+          items:
+            type: object
+            
+    HealthCheckResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+        environment:
+          type: string
+        uptime:
+          type: string
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+              latency_ms:
+                type: number
+              details:
+                type: object
+              error:
+                type: string
+        system_metrics:
+          type: object
+          
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+            message:
+              type: string
+            details:
+              type: object
+            request_id:
+              type: string
+              format: uuid
+              
+  responses:
+    BadRequestError:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    UnauthorizedError:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    ForbiddenError:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    RateLimitError:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until rate limit resets
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

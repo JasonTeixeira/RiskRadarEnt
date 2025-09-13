@@ -1,0 +1,582 @@
+name: Enterprise CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, release/*]
+  pull_request:
+    branches: [main, develop]
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # Code Quality Checks
+  code-quality:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/pre-commit
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files
+
+      - name: Run Black formatter check
+        run: black --check services/ libs/
+
+      - name: Run isort import checker
+        run: isort --check-only services/ libs/
+
+      - name: Run Flake8 linter
+        run: flake8 services/ libs/ --config=.flake8
+
+      - name: Run Pylint
+        run: pylint services/ libs/ --rcfile=.pylintrc
+
+      - name: Run mypy type checker
+        run: mypy services/ libs/ --config-file=mypy.ini
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+
+  # Security Scanning
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Bandit security linter
+        run: |
+          pip install bandit[toml]
+          bandit -r services/ libs/ -f json -o bandit-report.json
+
+      - name: Run Safety check
+        run: |
+          pip install safety
+          safety check --json > safety-report.json || true
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: auto
+
+      - name: OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'RiskRadar-Enterprise'
+          path: '.'
+          format: 'HTML'
+          args: >
+            --enableRetired
+            --enableExperimental
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            dependency-check-report.html
+
+  # Unit Tests
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [risk-api, risk-compute-worker, data-ingestion]
+    services:
+      postgres:
+        image: timescale/timescaledb:2.13.0-pg15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r services/${{ matrix.service }}/requirements.txt
+          pip install -r requirements-test.txt
+
+      - name: Run unit tests with coverage
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379
+          ENVIRONMENT: test
+        run: |
+          cd services/${{ matrix.service }}
+          pytest tests/unit/ \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=term-missing \
+            --junitxml=junit.xml \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./services/${{ matrix.service }}/coverage.xml
+          flags: ${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/junit.xml
+            services/${{ matrix.service }}/htmlcov/
+
+  # Integration Tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Start services with docker-compose
+        run: |
+          docker-compose -f docker-compose.test.yml up -d
+          docker-compose -f docker-compose.test.yml ps
+          sleep 30  # Wait for services to be ready
+
+      - name: Run integration tests
+        run: |
+          docker-compose -f docker-compose.test.yml \
+            exec -T risk-api \
+            pytest tests/integration/ -v --tb=short
+
+      - name: Run API contract tests
+        run: |
+          docker-compose -f docker-compose.test.yml \
+            exec -T risk-api \
+            pytest tests/contracts/ -v
+
+      - name: Collect docker logs
+        if: always()
+        run: docker-compose -f docker-compose.test.yml logs > docker-logs.txt
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-logs
+          path: docker-logs.txt
+
+      - name: Stop services
+        if: always()
+        run: docker-compose -f docker-compose.test.yml down -v
+
+  # Performance Tests
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up K6
+        run: |
+          sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Start services
+        run: |
+          docker-compose up -d
+          sleep 45  # Wait for services
+
+      - name: Run load tests
+        run: |
+          k6 run tests/performance/load/script.js \
+            --out json=load-test-results.json \
+            --summary-export=load-test-summary.json
+
+      - name: Run stress tests
+        run: |
+          k6 run tests/performance/stress/script.js \
+            --out json=stress-test-results.json \
+            --summary-export=stress-test-summary.json
+
+      - name: Analyze performance results
+        run: |
+          python scripts/analyze_performance.py \
+            load-test-summary.json \
+            stress-test-summary.json
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-results
+          path: |
+            *-test-results.json
+            *-test-summary.json
+            performance-report.html
+
+  # Build Docker Images
+  build-images:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [code-quality, security-scan, unit-tests]
+    strategy:
+      matrix:
+        service: [risk-api, risk-compute-worker, data-ingestion]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ secrets.DOCKER_USERNAME }}/riskradar-${{ matrix.service }}
+            ghcr.io/${{ github.repository_owner }}/riskradar-${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/${{ matrix.service }}
+          file: ./services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+      - name: Run Trivy scan on image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/riskradar-${{ matrix.service }}:latest
+          format: 'sarif'
+          output: 'trivy-${{ matrix.service }}.sarif'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-${{ matrix.service }}.sarif'
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-images, integration-tests]
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    environment:
+      name: staging
+      url: https://staging.riskradar.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name riskradar-staging
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install riskradar \
+            ./infrastructure/helm/charts/riskradar \
+            --namespace staging \
+            --create-namespace \
+            --values ./infrastructure/helm/values/staging.yaml \
+            --set image.tag=${{ github.sha }} \
+            --wait \
+            --timeout 10m
+
+      - name: Run smoke tests
+        run: |
+          kubectl run smoke-test \
+            --image=curlimages/curl:latest \
+            --rm \
+            --attach \
+            --restart=Never \
+            -- curl -f https://staging-api.riskradar.com/health
+
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Staging deployment ${{ job.status }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'release'
+    environment:
+      name: production
+      url: https://api.riskradar.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name riskradar-production
+
+      - name: Create deployment record
+        run: |
+          echo "Deployment started at $(date)" >> deployment.log
+          echo "Version: ${{ github.sha }}" >> deployment.log
+          echo "Triggered by: ${{ github.actor }}" >> deployment.log
+
+      - name: Blue-Green Deployment
+        run: |
+          # Deploy to green environment
+          helm upgrade --install riskradar-green \
+            ./infrastructure/helm/charts/riskradar \
+            --namespace production \
+            --values ./infrastructure/helm/values/production.yaml \
+            --set image.tag=${{ github.sha }} \
+            --set bluegreen.productionSlot=green \
+            --wait \
+            --timeout 15m
+
+          # Run health checks
+          ./scripts/health_check.sh green
+
+          # Switch traffic to green
+          kubectl patch service riskradar-api \
+            -n production \
+            -p '{"spec":{"selector":{"slot":"green"}}}'
+
+          # Wait and monitor
+          sleep 60
+          ./scripts/monitor_deployment.sh
+
+          # Clean up blue deployment
+          helm uninstall riskradar-blue -n production || true
+
+      - name: Run E2E tests
+        run: |
+          npm install -g @playwright/test
+          npx playwright test tests/e2e/ --reporter=html
+
+      - name: Performance validation
+        run: |
+          k6 run tests/performance/production-validation.js \
+            --summary-export=prod-validation.json
+          
+          python scripts/validate_slo.py prod-validation.json
+
+      - name: Create GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            deployment.log
+            prod-validation.json
+          tag_name: ${{ github.ref }}
+          body: |
+            ## Production Deployment
+            - Version: ${{ github.sha }}
+            - Environment: Production
+            - Status: Success
+
+      - name: Notify teams
+        if: always()
+        run: |
+          # Slack notification
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"Production deployment ${{ job.status }}"}' \
+            ${{ secrets.SLACK_WEBHOOK }}
+          
+          # PagerDuty notification
+          curl -X POST https://events.pagerduty.com/v2/enqueue \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "routing_key": "${{ secrets.PAGERDUTY_KEY }}",
+              "event_action": "trigger",
+              "payload": {
+                "summary": "Production deployment completed",
+                "severity": "info",
+                "source": "github-actions"
+              }
+            }'
+
+  # Rollback on Failure
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: failure()
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Rollback Helm release
+        run: |
+          helm rollback riskradar -n production
+
+      - name: Notify emergency
+        run: |
+          curl -X POST https://events.pagerduty.com/v2/enqueue \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "routing_key": "${{ secrets.PAGERDUTY_KEY }}",
+              "event_action": "trigger",
+              "payload": {
+                "summary": "PRODUCTION ROLLBACK INITIATED",
+                "severity": "error",
+                "source": "github-actions"
+              }
+            }'

@@ -1,0 +1,301 @@
+version: '3.9'
+
+x-common-variables: &common-variables
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  REDIS_URL: redis://redis:6379
+  DATABASE_URL: postgresql://${DB_USER:-riskradar}:${DB_PASSWORD:-riskradar}@postgres:5432/${DB_NAME:-riskradar}
+  KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+  PROMETHEUS_PUSHGATEWAY_URL: http://pushgateway:9091
+
+services:
+  # Risk API Service
+  risk-api:
+    container_name: riskradar-risk-api
+    build:
+      context: ./services/risk-api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *common-variables
+      SERVICE_NAME: risk-api
+      PORT: 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./services/risk-api:/app
+      - ./libs/python:/libs/python:ro
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Risk Compute Worker
+  risk-compute-worker:
+    container_name: riskradar-compute-worker
+    build:
+      context: ./services/risk-compute-worker
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-variables
+      SERVICE_NAME: risk-compute-worker
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    volumes:
+      - ./services/risk-compute-worker:/app
+      - ./libs/python:/libs/python:ro
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # Data Ingestion Service
+  data-ingestion:
+    container_name: riskradar-data-ingestion
+    build:
+      context: ./services/data-ingestion
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *common-variables
+      SERVICE_NAME: data-ingestion
+      PORT: 8001
+      MARKET_DATA_PROVIDERS: ${MARKET_DATA_PROVIDERS:-yahoo,alphavantage,polygon}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./services/data-ingestion:/app
+      - ./libs/python:/libs/python:ro
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Portfolio Manager Service
+  portfolio-manager:
+    container_name: riskradar-portfolio-manager
+    build:
+      context: ./services/portfolio-manager
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      <<: *common-variables
+      SERVICE_NAME: portfolio-manager
+      PORT: 8002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./services/portfolio-manager:/app
+      - ./libs/python:/libs/python:ro
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Event Publisher Service
+  event-publisher:
+    container_name: riskradar-event-publisher
+    build:
+      context: ./services/event-publisher
+      dockerfile: Dockerfile
+    environment:
+      <<: *common-variables
+      SERVICE_NAME: event-publisher
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    volumes:
+      - ./services/event-publisher:/app
+      - ./libs/python:/libs/python:ro
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Notification Service
+  notification-service:
+    container_name: riskradar-notification
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      <<: *common-variables
+      SERVICE_NAME: notification-service
+      PORT: 8003
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./services/notification-service:/app
+      - ./libs/python:/libs/python:ro
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    container_name: riskradar-postgres
+    image: timescale/timescaledb:2.13.0-pg15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER:-riskradar}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-riskradar}
+      POSTGRES_DB: ${DB_NAME:-riskradar}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=en_US.UTF-8"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./data/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-riskradar}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    container_name: riskradar-redis
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Redpanda (Kafka Alternative)
+  redpanda:
+    container_name: riskradar-redpanda
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.3
+    command:
+      - redpanda
+      - start
+      - --smp 2
+      - --memory 2G
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - "19092:19092"  # Kafka API
+      - "18082:18082"  # HTTP Proxy
+      - "18081:18081"  # Schema Registry
+      - "9644:9644"    # Prometheus metrics
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.*true' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+  # Redpanda Console
+  redpanda-console:
+    container_name: riskradar-redpanda-console
+    image: docker.redpanda.com/redpandadata/console:v2.4.0
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_FILEPATH: /etc/console/console-config.yaml
+    volumes:
+      - ./config/redpanda-console.yaml:/etc/console/console-config.yaml:ro
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - riskradar-network
+    restart: unless-stopped
+
+networks:
+  riskradar-network:
+    driver: bridge
+    name: riskradar-network
+
+volumes:
+  postgres-data:
+    name: riskradar-postgres-data
+  redis-data:
+    name: riskradar-redis-data
+  redpanda-data:
+    name: riskradar-redpanda-data
