@@ -49,6 +49,24 @@ make test-performance
 
 # Run all tests with coverage
 make test-coverage
+
+# Run a single test file
+python -m pytest services/risk-api/tests/test_health.py -v
+
+# Run a specific test function
+python -m pytest services/risk-api/tests/test_health.py::test_healthz -v
+
+# Run tests matching a keyword
+python -m pytest -k "risk and not slow" -v
+```
+
+### Local Development
+```bash
+# Run a single service locally with auto-reload
+cd services/risk-api && uvicorn app.main:app --reload --port 8000
+
+# Run with Python directly
+python services/risk-api/app/main.py
 ```
 
 ### Code Quality

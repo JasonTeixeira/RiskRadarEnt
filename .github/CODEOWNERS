@@ -1,0 +1,25 @@
+# RiskRadar Enterprise CODEOWNERS
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @JasonTeixeira
+
+# Core services
+/services/risk-api/ @JasonTeixeira
+/services/risk-compute-worker/ @JasonTeixeira
+/services/data-ingestion/ @JasonTeixeira
+
+# Infrastructure and deployment
+/infrastructure/ @JasonTeixeira
+/monitoring/ @JasonTeixeira
+
+# Shared libraries
+/libs/python/ @JasonTeixeira
+/libs/proto/ @JasonTeixeira
+/libs/schemas/ @JasonTeixeira
+
+# Documentation
+/docs/ @JasonTeixeira
+
+# CI/CD and GitHub Actions
+/.github/ @JasonTeixeira
