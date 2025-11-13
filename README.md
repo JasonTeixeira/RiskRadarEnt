@@ -1,335 +1,159 @@
 # RiskRadar Enterprise
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com/)
-[![Docker](https://img.shields.io/badge/Docker-24.0+-blue.svg)](https://www.docker.com/)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28+-blue.svg)](https://kubernetes.io/)
+**Experimental microservices rewrite of RiskRadar**
 
-## 🚀 Overview
-
-RiskRadar Enterprise is a production-grade, cloud-native risk management platform designed for institutional-level portfolio analysis and real-time risk monitoring. Built with microservices architecture, event-driven design, and enterprise-grade reliability.
-
-### Key Features
-
-- **Real-time Risk Analytics**: Sub-second calculation of VaR, CVaR, Sharpe ratio, and custom risk metrics
-- **Multi-Asset Support**: Equities, fixed income, derivatives, alternatives, and crypto assets
-- **Scalable Architecture**: Horizontally scalable microservices with Kubernetes orchestration
-- **Event-Driven Processing**: Apache Kafka/Redpanda for real-time event streaming
-- **Enterprise Security**: OAuth2/OIDC, mTLS, secrets management, and audit logging
-- **High Availability**: 99.99% uptime with multi-region deployment capability
-- **Comprehensive Observability**: Metrics, logs, traces, and custom dashboards
-
-## 🏗️ Architecture
-
-```mermaid
-graph TB
-    subgraph "Client Layer"
-        WEB[Web Dashboard]
-        API[API Clients]
-        MOBILE[Mobile Apps]
-    end
-    
-    subgraph "Gateway Layer"
-        LB[Load Balancer]
-        APIGW[API Gateway]
-        AUTH[Auth Service]
-    end
-    
-    subgraph "Application Layer"
-        RISKAPI[Risk API Service]
-        COMPUTE[Risk Compute Workers]
-        INGEST[Data Ingestion Service]
-        PORTFOLIO[Portfolio Manager]
-        NOTIFY[Notification Service]
-    end
-    
-    subgraph "Data Layer"
-        KAFKA[Kafka/Redpanda]
-        TSDB[TimescaleDB]
-        REDIS[Redis Cache]
-        S3[Object Storage]
-    end
-    
-    subgraph "Infrastructure Layer"
-        K8S[Kubernetes]
-        PROM[Prometheus]
-        GRAF[Grafana]
-        ELK[ELK Stack]
-    end
-    
-    WEB --> LB
-    API --> LB
-    MOBILE --> LB
-    LB --> APIGW
-    APIGW --> AUTH
-    APIGW --> RISKAPI
-    RISKAPI --> COMPUTE
-    RISKAPI --> KAFKA
-    COMPUTE --> KAFKA
-    INGEST --> KAFKA
-    KAFKA --> TSDB
-    RISKAPI --> REDIS
-    COMPUTE --> TSDB
-    K8S --> PROM
-    PROM --> GRAF
+```
+┌──────────────────────────────────────────────┐
+│  WHAT THIS IS                                │
+├──────────────────────────────────────────────┤
+│  • Microservices architecture exploration   │
+│  • Event-driven risk calculations (Kafka)  │
+│  • Kubernetes deployment configs            │
+│  • Learning project, not production-ready   │
+│  • Based on RiskRadar (simpler version)     │
+└──────────────────────────────────────────────┘
 ```
 
-## 📦 Services
+## Why I Built This
 
-### Core Services
+After building **RiskRadar** (the monolithic FastAPI + Next.js version), I wanted to learn microservices patterns. I'd read about event-driven architecture, Kafka, Kubernetes, and all the "enterprise" buzzwords, but never actually implemented them.
 
-| Service | Description | Technology | Port |
-|---------|-------------|------------|------|
-| Risk API | REST/WebSocket API for risk calculations | FastAPI, Python 3.11 | 8000 |
-| Risk Compute Worker | Async processing of risk calculations | Celery, NumPy, Pandas | N/A |
-| Data Ingestion | Market data collection and normalization | Python, AsyncIO | 8001 |
-| Portfolio Manager | Portfolio CRUD and optimization | FastAPI, SQLAlchemy | 8002 |
-| Event Publisher | Event streaming and pub/sub | Kafka Producer | N/A |
-| Notification Service | Alerts and notifications | FastAPI, SendGrid, Twilio | 8003 |
+This repo is my experiment in decomposing the RiskRadar monolith into separate services. Instead of one big Python app, I split it into:
+- Risk API service (HTTP/WebSocket)
+- Risk compute workers (async calculations)
+- Data ingestion service (market data collection)
+- Portfolio manager service
+- Event publisher (Kafka)
 
-### Infrastructure Services
+The goal wasn't to make something better—RiskRadar works fine as a monolith. The goal was to learn distributed systems patterns and see where the complexity comes from.
 
-| Service | Description | Technology |
-|---------|-------------|------------|
-| API Gateway | Request routing, rate limiting, auth | Kong/Envoy |
-| Message Broker | Event streaming platform | Kafka/Redpanda |
-| Time Series DB | Historical data storage | TimescaleDB |
-| Cache | High-speed data cache | Redis Cluster |
-| Monitoring | Metrics collection | Prometheus |
-| Visualization | Dashboards and alerts | Grafana |
-| Logging | Centralized logging | ELK Stack |
-| Tracing | Distributed tracing | Jaeger |
+## Architecture
 
-## 🚀 Quick Start
+```
+┌──────────────────┐
+│  API Gateway     │  Kong/Envoy (not implemented yet)
+└────────┬─────────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+┌──────────┐ ┌──────────┐
+│Risk API  │ │Portfolio │
+│Service   │ │Manager   │
+└────┬─────┘ └────┬─────┘
+     │            │
+     ▼            ▼
+┌─────────────────────┐
+│   Kafka/Redpanda    │  Event bus (not running locally)
+└─────────────────────┘
+     │
+     ▼
+┌─────────────────────┐
+│ Risk Compute Worker │  Celery workers (stubbed out)
+└─────────────────────┘
+     │
+     ▼
+┌─────────────────────┐
+│   TimescaleDB       │  Time-series cost data
+└─────────────────────┘
+```
 
-### Prerequisites
+## What's Inside
 
-- Docker 24.0+
-- Docker Compose 2.20+
+**Services (`/services`):**
+- `risk-api/` - FastAPI service for risk calculations (skeleton, no real logic)
+- `risk-compute-worker/` - Celery workers for async tasks (mostly empty)
+- `data-ingestion/` - Market data collectors (stub)
+- `portfolio-manager/` - Portfolio CRUD (not implemented)
+
+**Infrastructure (`/infrastructure`):**
+- `kubernetes/` - K8s deployments, services, ingress configs
+- `terraform/` - Basic AWS/GCP IaC (incomplete)
+- `helm/` - Helm charts for service deployment (minimal)
+
+**Shared libs (`/libs`):**
+- `python/` - Shared Python packages (schemas, utilities)
+- `proto/` - Protocol buffers for inter-service communication (not used yet)
+
+**Monitoring (`/monitoring`):**
+- Prometheus configs
+- Grafana dashboards (empty templates)
+
+## What Works
+
+**Kubernetes manifests:** The deployments, services, and config files are syntactically correct. You can `kubectl apply` them and they won't error out (though the services won't do anything useful).
+
+**Makefile:** There's a comprehensive Makefile with commands for building, testing, deploying. Most commands work (though they're operating on stub code).
+
+**Project structure:** The directory layout follows microservices conventions. It looks professional.
+
+## What Doesn't Work
+
+**Everything else.** This is essentially a skeleton with no business logic.
+
+**No Kafka:** I set up Kafka locally once, but it's resource-heavy (1GB+ RAM) and I never hooked it up to the services. Event-driven architecture is purely theoretical here.
+
+**No API Gateway:** The architecture diagram shows Kong/Envoy, but there's no actual gateway. Services would need to call each other directly.
+
+**No real services:** The `risk-api` service has FastAPI boilerplate, but the endpoints return mocked data. The compute workers don't compute anything. The portfolio manager doesn't manage portfolios.
+
+**No tests:** Despite having a `tests/` directory with integration/performance/chaos subdirectories, there are no tests. The structure exists, the tests don't.
+
+**Fake performance metrics:** The old README claimed "10,000 req/s", "100,000+ concurrent portfolios", "99.99% availability SLA". All of that is fiction. This has never run at scale.
+
+**Compliance nonsense:** References to "SOC 2 Type II", "PCI DSS Level 1", "ISO 27001" are aspirational at best, completely made up at worst.
+
+## What I Learned
+
+**Microservices add overhead:** Breaking a monolith into services introduces network latency, serialization costs, deployment complexity, and operational burden. For a side project with one user (me), it's absurd overkill.
+
+**Kafka is heavy:** Running Kafka/Zookeeper locally for development consumes significant resources. For event-driven patterns, a simple message queue (Redis Streams, RabbitMQ) would've been smarter.
+
+**Kubernetes locally is painful:** Minikube/K3s work, but debugging services across multiple pods is slow. Docker Compose would've been enough for learning.
+
+**"Enterprise" patterns aren't free:** Every service needs its own DB connection, config management, error handling, logging, monitoring. The cognitive overhead grew fast.
+
+## What I'd Do Differently
+
+**Skip it entirely:** The monolithic RiskRadar does what I need. This experiment taught me that microservices make sense at scale (large teams, independent deployments, high traffic), but not for personal projects.
+
+**Use Docker Compose:** If I still wanted to explore service decomposition, I'd use Docker Compose instead of Kubernetes. Way simpler for local dev.
+
+**Start with a modular monolith:** Instead of jumping to microservices, I'd refactor RiskRadar into separate modules with clean boundaries. Get the benefits of separation without the deployment complexity.
+
+**Actually implement one service:** I should've fully built the risk calculation service before adding more services. Spreading effort across multiple half-baked services was a waste.
+
+## Quick Start
+
+**Prerequisites:**
+- Docker + Docker Compose
 - Python 3.11+
-- Node.js 18+ (for dashboard)
-- kubectl 1.28+ (for Kubernetes deployment)
+- kubectl (if you want to try the K8s configs)
 
-### Local Development Setup
-
-1. **Clone the repository**
+**Local "development":**
 ```bash
-git clone https://github.com/your-org/riskradar-enterprise.git
-cd riskradar-enterprise
-```
+git clone https://github.com/JasonTeixeira/RiskRadarEnt.git
+cd RiskRadarEnt
 
-2. **Set up environment variables**
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-3. **Start infrastructure services**
-```bash
+# Start infrastructure (Postgres, Redis - no Kafka)
 make infra-up
-```
 
-4. **Run database migrations**
-```bash
-make db-migrate
-```
-
-5. **Start application services**
-```bash
+# "Start" services (they'll run but do nothing useful)
 make services-up
 ```
 
-6. **Access the services**
-- API Documentation: http://localhost:8000/docs
-- Grafana Dashboard: http://localhost:3000
-- Kafka UI: http://localhost:8080
+Most commands in the Makefile will execute without errors, but the services return mock data or do nothing.
 
-## 🛠️ Development
+## Current Status
 
-### Project Structure
+**Not deployed anywhere.** **Not used.** **Not maintained.**
 
-```
-RiskRadar-Enterprise/
-├── services/              # Microservices
-│   ├── risk-api/         # Risk calculation API
-│   ├── risk-compute-worker/  # Async workers
-│   ├── data-ingestion/   # Data collectors
-│   └── ...
-├── libs/                  # Shared libraries
-│   ├── python/           # Python packages
-│   ├── proto/            # Protocol buffers
-│   └── schemas/          # Data schemas
-├── infrastructure/        # IaC and deployment
-│   ├── terraform/        # Cloud resources
-│   ├── kubernetes/       # K8s manifests
-│   └── helm/             # Helm charts
-├── monitoring/           # Observability
-│   ├── prometheus/       # Metrics
-│   ├── grafana/         # Dashboards
-│   └── elk/             # Logging
-├── tests/               # Test suites
-│   ├── integration/     # Integration tests
-│   ├── performance/     # Load tests
-│   └── chaos/          # Chaos engineering
-└── docs/               # Documentation
-```
+This is a learning artifact. I keep it around as a reminder of what over-engineering looks like and to reference the Kubernetes configs when I need them for actual projects.
 
-### Running Tests
-
-```bash
-# Unit tests
-make test-unit
-
-# Integration tests
-make test-integration
-
-# Performance tests
-make test-performance
-
-# All tests
-make test-all
-```
-
-### Code Quality
-
-```bash
-# Format code
-make format
-
-# Lint code
-make lint
-
-# Type checking
-make typecheck
-
-# Security scanning
-make security-scan
-```
-
-## 📊 API Documentation
-
-### Authentication
-
-All API endpoints require authentication via JWT tokens:
-
-```bash
-curl -X POST https://api.riskradar.com/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user", "password": "pass"}'
-```
-
-### Example: Calculate Portfolio Risk
-
-```bash
-curl -X POST https://api.riskradar.com/v1/risk/calculate \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "portfolio_id": "123",
-    "metrics": ["var", "cvar", "sharpe"],
-    "confidence_level": 0.95,
-    "horizon": "1d"
-  }'
-```
-
-## 🚢 Deployment
-
-### Kubernetes Deployment
-
-```bash
-# Create namespace
-kubectl create namespace riskradar
-
-# Deploy infrastructure
-kubectl apply -k infrastructure/kubernetes/base
-
-# Deploy services
-helm install riskradar ./infrastructure/helm/charts/riskradar \
-  --namespace riskradar \
-  --values ./infrastructure/helm/values/production.yaml
-```
-
-### Cloud Deployment (AWS)
-
-```bash
-# Initialize Terraform
-cd infrastructure/terraform/aws
-terraform init
-
-# Plan deployment
-terraform plan -var-file=production.tfvars
-
-# Apply changes
-terraform apply -var-file=production.tfvars
-```
-
-## 📈 Performance
-
-### Benchmarks
-
-| Operation | Latency (p50) | Latency (p99) | Throughput |
-|-----------|---------------|---------------|------------|
-| Risk Calculation | 45ms | 120ms | 10,000 req/s |
-| Portfolio Update | 15ms | 50ms | 25,000 req/s |
-| Market Data Fetch | 100ms | 300ms | 5,000 req/s |
-| Event Processing | 5ms | 15ms | 100,000 evt/s |
-
-### Scalability
-
-- Horizontal scaling up to 1000 pods
-- Supports 100,000+ concurrent portfolios
-- Processes 1M+ events per second
-- 99.99% availability SLA
-
-## 🔒 Security
-
-### Security Features
-
-- **Authentication**: OAuth2/OIDC with MFA support
-- **Authorization**: RBAC with fine-grained permissions
-- **Encryption**: TLS 1.3 for transit, AES-256 for rest
-- **Secrets Management**: HashiCorp Vault integration
-- **Audit Logging**: Comprehensive audit trail
-- **Vulnerability Scanning**: Automated security scanning in CI/CD
-
-### Compliance
-
-- SOC 2 Type II compliant
-- GDPR ready
-- PCI DSS Level 1 (for payment data)
-- ISO 27001 certified infrastructure
-
-## 📚 Documentation
-
-- [Architecture Guide](docs/architecture/README.md)
-- [API Reference](docs/api/README.md)
-- [Deployment Guide](docs/deployment/README.md)
-- [Runbooks](docs/runbooks/README.md)
-- [ADRs](docs/adr/README.md)
-
-## 🤝 Contributing
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- **Documentation**: [docs.riskradar.com](https://docs.riskradar.com)
-- **Issues**: [GitHub Issues](https://github.com/your-org/riskradar-enterprise/issues)
-- **Slack**: [#riskradar-support](https://your-org.slack.com/channels/riskradar-support)
-- **Email**: support@riskradar.com
-
-## 🙏 Acknowledgments
-
-- FastAPI for the excellent web framework
-- Apache Kafka for event streaming
-- Kubernetes for container orchestration
-- All open-source contributors
+If you're evaluating my work, look at **RiskRadar** instead—that's the functional version. This is the "what if I made it unnecessarily complicated" version.
 
 ---
 
-Built with ❤️ by the RiskRadar Team
+**Built with:** FastAPI, Kubernetes, Kafka (theoretically), Helm, Terraform  
+**Started:** October 2024  
+**Status:** Abandoned experiment  
+**Lesson learned:** Not everything needs microservices
